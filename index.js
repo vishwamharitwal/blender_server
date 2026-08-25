@@ -6,6 +6,15 @@ const cors = require('cors');
 const app = express();
 app.use(cors());
 
+// Health check and root route for keep-alive pings
+app.get('/', (req, res) => {
+  res.json({ status: 'ok', message: 'Blender Signaling Server is live and awake!' });
+});
+
+app.get('/health', (req, res) => {
+  res.json({ status: 'healthy', waitingUsers: waitingUsers.length, activeRooms: activeRooms.size });
+});
+
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
@@ -25,9 +34,14 @@ io.on('connection', (socket) => {
   socket.on('findMatch', (userData) => {
     console.log(`User ${socket.id} looking for match. Letter: ${userData?.letter}, UserId: ${userData?.userId}`);
 
+    // Clean up stale or self entries in waitingUsers queue
+    waitingUsers = waitingUsers.filter(
+      (u) => u.socket.connected && u.socket.id !== socket.id && (userData?.userId ? u.userData?.userId !== userData.userId : true)
+    );
+
     // If there's someone waiting, match them!
     if (waitingUsers.length > 0) {
-      const partner = waitingUsers.pop();
+      const partner = waitingUsers.shift(); // FIFO order
       const roomId = `room_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
 
       // Join both sockets to the room
@@ -65,7 +79,7 @@ io.on('connection', (socket) => {
     } else {
       // Nobody is waiting, add this user to the queue
       waitingUsers.push({ socket: socket, userData: userData });
-      console.log(`User ${socket.id} added to waiting queue.`);
+      console.log(`User ${socket.id} added to waiting queue. Total waiting: ${waitingUsers.length}`);
     }
   });
 
@@ -127,6 +141,17 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     console.log(`User disconnected: ${socket.id}`);
     waitingUsers = waitingUsers.filter((u) => u.socket.id !== socket.id);
+
+    // Notify any active room if a user disconnects abruptly
+    for (const [roomId, room] of activeRooms.entries()) {
+      if (room.user1 === socket.id || room.user2 === socket.id) {
+        const remainingUserId = room.user1 === socket.id ? room.user2 : room.user1;
+        io.to(remainingUserId).emit('matchCanceled', { message: 'Partner disconnected.' });
+        io.to(remainingUserId).emit('callEnded', { message: 'Partner disconnected.' });
+        activeRooms.delete(roomId);
+        console.log(`Cleaned up room ${roomId} due to disconnect of ${socket.id}`);
+      }
+    }
   });
 });
 
