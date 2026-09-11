@@ -56,8 +56,24 @@ function cleanupRoom(roomId, reason = 'Match ended') {
   console.log(`[Room Cleaned] ${roomId} (Reason: ${reason}). Remaining active rooms: ${activeRooms.size}`);
 }
 
+/**
+ * Broadcast live online users count to all connected sockets (0 DB load)
+ */
+function broadcastOnlineCount() {
+  const count = io.engine.clientsCount || 0;
+  io.emit('onlineCount', { count: count });
+}
+
+// Periodic heartbeat broadcast every 15 seconds
+setInterval(broadcastOnlineCount, 15000);
+
 io.on('connection', (socket) => {
   console.log(`[Socket Connected] ${socket.id} (Total sockets: ${io.engine.clientsCount})`);
+  broadcastOnlineCount();
+
+  socket.on('getOnlineCount', () => {
+    socket.emit('onlineCount', { count: io.engine.clientsCount || 1 });
+  });
 
   // --- 1. FIND MATCH ---
   socket.on('findMatch', (userData) => {
@@ -80,68 +96,90 @@ io.on('connection', (socket) => {
       }
     }
 
-    // Match with the first valid waiting user in queue
-    while (waitingUsers.length > 0) {
-      const candidate = waitingUsers.shift();
+    // Helper: Check VIP gender preference compatibility
+    function isCompatible(u1, u2) {
+      const g1 = (u1?.gender || 'Boy').toLowerCase();
+      const p1 = (u1?.preferredGender || 'Anyone').toLowerCase();
+      const isVip1 = !!u1?.isVip;
 
-      // Ensure candidate socket is still alive and not the same user
-      if (candidate.socket.connected && candidate.socket.id !== socket.id) {
-        const roomId = `room_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+      const g2 = (u2?.gender || 'Boy').toLowerCase();
+      const p2 = (u2?.preferredGender || 'Anyone').toLowerCase();
+      const isVip2 = !!u2?.isVip;
 
-        socket.join(roomId);
-        candidate.socket.join(roomId);
-
-        // 30-Second Acceptance Timeout (prevents one user hanging if other ignores)
-        const timeoutTimer = setTimeout(() => {
-          const r = activeRooms.get(roomId);
-          if (r && !r.callStarted) {
-            console.log(`[Match Timeout] Room ${roomId} expired without mutual acceptance.`);
-            io.to(roomId).emit('matchCanceled', { message: 'Match timed out. Finding a new soul...' });
-            cleanupRoom(roomId, 'Acceptance timeout');
-          }
-        }, 35000);
-
-        activeRooms.set(roomId, {
-          user1: socket.id,
-          user1Accepted: false,
-          user2: candidate.socket.id,
-          user2Accepted: false,
-          timeoutTimer: timeoutTimer,
-          callStarted: false,
-        });
-
-        console.log(`⚡ [MATCH SUCCESS] ${socket.id} (Caller) <===> ${candidate.socket.id} (Receiver) in [${roomId}]`);
-
-        // Emit matchFound to Caller
-        io.to(socket.id).emit('matchFound', {
-          roomId: roomId,
-          partnerLetter: candidate.userData?.letter || 'A soul with unspoken thoughts.',
-          partnerUserId: candidate.userData?.userId || null,
-          partnerAvatarUrl: candidate.userData?.avatarUrl || null,
-          isCaller: true,
-        });
-
-        // Emit matchFound to Receiver
-        io.to(candidate.socket.id).emit('matchFound', {
-          roomId: roomId,
-          partnerLetter: userData?.letter || 'A soul with unspoken thoughts.',
-          partnerUserId: userData?.userId || null,
-          partnerAvatarUrl: userData?.avatarUrl || null,
-          isCaller: false,
-        });
-
-        return; // Matched successfully!
+      if (isVip1) {
+        if (p1 === 'girls' && !g2.includes('girl')) return false;
+        if (p1 === 'boys' && !g2.includes('boy')) return false;
       }
+      if (isVip2) {
+        if (p2 === 'girls' && !g1.includes('girl')) return false;
+        if (p2 === 'boys' && !g1.includes('boy')) return false;
+      }
+      return true;
+    }
+
+    // Find first compatible candidate in waiting queue
+    const candidateIndex = waitingUsers.findIndex((u) =>
+      u.socket.connected && u.socket.id !== socket.id && isCompatible(userData, u.userData)
+    );
+
+    if (candidateIndex !== -1) {
+      const [candidate] = waitingUsers.splice(candidateIndex, 1);
+      const roomId = `room_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+
+      socket.join(roomId);
+      candidate.socket.join(roomId);
+
+      // 30-Second Acceptance Timeout (prevents one user hanging if other ignores)
+      const timeoutTimer = setTimeout(() => {
+        const r = activeRooms.get(roomId);
+        if (r && !r.callStarted) {
+          console.log(`[Match Timeout] Room ${roomId} expired without mutual acceptance.`);
+          io.to(roomId).emit('matchCanceled', { message: 'Match timed out. Finding a new soul...' });
+          cleanupRoom(roomId, 'Acceptance timeout');
+        }
+      }, 35000);
+
+      activeRooms.set(roomId, {
+        user1: socket.id,
+        user1Accepted: false,
+        user2: candidate.socket.id,
+        user2Accepted: false,
+        timeoutTimer: timeoutTimer,
+        callStarted: false,
+      });
+
+      console.log(`⚡ [MATCH SUCCESS] ${socket.id} (Caller) <===> ${candidate.socket.id} (Receiver) in [${roomId}]`);
+
+      // Emit matchFound to Caller
+      io.to(socket.id).emit('matchFound', {
+        roomId: roomId,
+        partnerLetter: candidate.userData?.letter || 'A soul with unspoken thoughts.',
+        partnerUserId: candidate.userData?.userId || null,
+        partnerAvatarUrl: candidate.userData?.avatarUrl || null,
+        isCaller: true,
+      });
+
+      // Emit matchFound to Receiver
+      io.to(candidate.socket.id).emit('matchFound', {
+        roomId: roomId,
+        partnerLetter: userData?.letter || 'A soul with unspoken thoughts.',
+        partnerUserId: userData?.userId || null,
+        partnerAvatarUrl: userData?.avatarUrl || null,
+        isCaller: false,
+      });
+
+      return; // Matched successfully!
     }
 
     // If no candidate available, add to waiting queue
     waitingUsers.push({ socket: socket, userData: userData });
-    console.log(`⏳ [Queued] User ${socket.id} waiting. Current queue depth: ${waitingUsers.length}`);
+    console.log(`⏳ [Queued] User ${socket.id} (VIP: ${!!userData?.isVip}, Filter: ${userData?.preferredGender || 'Anyone'}) waiting. Queue depth: ${waitingUsers.length}`);
   });
 
   // --- 2. ACCEPT MATCH ---
   socket.on('acceptMatch', (data) => {
     const { roomId } = data || {};
+    if (roomId) socket.join(roomId);
     const room = activeRooms.get(roomId);
 
     if (!room) {
@@ -161,6 +199,8 @@ io.on('connection', (socket) => {
 
       console.log(`📞 [START CALL] Both accepted in room ${roomId}. Emitting startCall.`);
       io.to(roomId).emit('startCall', { roomId });
+      io.to(room.user1).emit('startCall', { roomId });
+      io.to(room.user2).emit('startCall', { roomId });
     }
   });
 
@@ -177,20 +217,42 @@ io.on('connection', (socket) => {
 
   // --- 4. WEBRTC SIGNALING RELAYS ---
   socket.on('offer', (data) => {
-    if (data?.roomId) {
-      socket.to(data.roomId).emit('offer', data.offer);
+    const { roomId, offer } = data || {};
+    if (!roomId || !offer) return;
+    socket.join(roomId);
+    const room = activeRooms.get(roomId);
+    if (room) {
+      const partnerId = room.user1 === socket.id ? room.user2 : room.user1;
+      console.log(`[Relay Offer] from ${socket.id} to partner ${partnerId} in room ${roomId}`);
+      io.to(partnerId).emit('offer', offer);
+    } else {
+      socket.to(roomId).emit('offer', offer);
     }
   });
 
   socket.on('answer', (data) => {
-    if (data?.roomId) {
-      socket.to(data.roomId).emit('answer', data.answer);
+    const { roomId, answer } = data || {};
+    if (!roomId || !answer) return;
+    socket.join(roomId);
+    const room = activeRooms.get(roomId);
+    if (room) {
+      const partnerId = room.user1 === socket.id ? room.user2 : room.user1;
+      console.log(`[Relay Answer] from ${socket.id} to partner ${partnerId} in room ${roomId}`);
+      io.to(partnerId).emit('answer', answer);
+    } else {
+      socket.to(roomId).emit('answer', answer);
     }
   });
 
   socket.on('candidate', (data) => {
-    if (data?.roomId) {
-      socket.to(data.roomId).emit('candidate', data.candidate);
+    const { roomId, candidate } = data || {};
+    if (!roomId || !candidate) return;
+    const room = activeRooms.get(roomId);
+    if (room) {
+      const partnerId = room.user1 === socket.id ? room.user2 : room.user1;
+      io.to(partnerId).emit('candidate', candidate);
+    } else {
+      socket.to(roomId).emit('candidate', candidate);
     }
   });
 
@@ -199,6 +261,12 @@ io.on('connection', (socket) => {
     const { roomId } = data || {};
     console.log(`[End Call] User ${socket.id} ended call in room ${roomId}`);
     if (roomId) {
+      const room = activeRooms.get(roomId);
+      if (room) {
+        const partnerId = room.user1 === socket.id ? room.user2 : room.user1;
+        console.log(`[End Call Relay] Sending callEnded to partner ${partnerId}`);
+        io.to(partnerId).emit('callEnded', { message: 'The other soul ended the call.' });
+      }
       socket.to(roomId).emit('callEnded', { message: 'The call was ended.' });
       cleanupRoom(roomId, 'User ended call');
     }
@@ -220,6 +288,8 @@ io.on('connection', (socket) => {
         cleanupRoom(roomId, `Socket disconnect: ${reason}`);
       }
     }
+
+    broadcastOnlineCount();
   });
 });
 
