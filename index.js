@@ -264,6 +264,15 @@ io.on('connection', (socket) => {
     }
   });
 
+  // --- 4.5 EXTEND CALL (+5 MINS) ---
+  socket.on('extendCall', (data) => {
+    const { roomId, addedSeconds = 300 } = data || {};
+    if (roomId) {
+      console.log(`[Extend Call] User ${socket.id} extended call in room ${roomId} by ${addedSeconds}s`);
+      io.to(roomId).emit('callExtended', { addedSeconds });
+    }
+  });
+
   // --- 5. END CALL ---
   socket.on('endCall', (data) => {
     const { roomId } = data || {};
