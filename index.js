@@ -204,11 +204,19 @@ io.on('connection', (socket) => {
     }
   });
 
-  // --- 3. SKIP MATCH ---
+  // --- 3. SKIP & CANCEL MATCH ---
+  socket.on('cancelMatch', () => {
+    console.log(`[Cancel Match] Socket ${socket.id} requested cancel`);
+    waitingUsers = waitingUsers.filter((u) => u.socket.id !== socket.id);
+  });
+
   socket.on('skipMatch', (data) => {
     const { roomId } = data || {};
     console.log(`[Skip] User ${socket.id} skipped match in room ${roomId}`);
     
+    // Always remove this user from waiting queue
+    waitingUsers = waitingUsers.filter((u) => u.socket.id !== socket.id);
+
     if (roomId && activeRooms.has(roomId)) {
       socket.to(roomId).emit('matchCanceled', { message: 'The other soul skipped the match.' });
       cleanupRoom(roomId, 'User skipped');
