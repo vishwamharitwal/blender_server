@@ -172,7 +172,17 @@ io.on('connection', (socket) => {
     }
 
     // If no candidate available, add to waiting queue
-    waitingUsers.push({ socket: socket, userData: userData });
+    if (userData?.isVip) {
+      // Find the first non-VIP user to insert the VIP user before them
+      const firstNonVipIndex = waitingUsers.findIndex(u => !u.userData?.isVip);
+      if (firstNonVipIndex === -1) {
+        waitingUsers.push({ socket: socket, userData: userData });
+      } else {
+        waitingUsers.splice(firstNonVipIndex, 0, { socket: socket, userData: userData });
+      }
+    } else {
+      waitingUsers.push({ socket: socket, userData: userData });
+    }
     console.log(`⏳ [Queued] User ${socket.id} (VIP: ${!!userData?.isVip}, Filter: ${userData?.preferredGender || 'Anyone'}) waiting. Queue depth: ${waitingUsers.length}`);
   });
 
