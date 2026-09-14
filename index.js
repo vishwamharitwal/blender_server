@@ -209,8 +209,6 @@ io.on('connection', (socket) => {
 
       console.log(`📞 [START CALL] Both accepted in room ${roomId}. Emitting startCall.`);
       io.to(roomId).emit('startCall', { roomId });
-      io.to(room.user1).emit('startCall', { roomId });
-      io.to(room.user2).emit('startCall', { roomId });
     }
   });
 
@@ -285,7 +283,7 @@ io.on('connection', (socket) => {
 
   // --- 5. END CALL ---
   socket.on('endCall', (data) => {
-    const { roomId } = data || {};
+    const roomId = (typeof data === 'string') ? data : (data?.roomId);
     console.log(`[End Call] User ${socket.id} ended call in room ${roomId}`);
     if (roomId) {
       const room = activeRooms.get(roomId);
@@ -294,7 +292,8 @@ io.on('connection', (socket) => {
         console.log(`[End Call Relay] Sending callEnded to partner ${partnerId}`);
         io.to(partnerId).emit('callEnded', { message: 'The other soul ended the call.' });
       }
-      socket.to(roomId).emit('callEnded', { message: 'The call was ended.' });
+      socket.to(roomId).emit('callEnded', { message: 'The other soul ended the call.' });
+      socket.leave(roomId);
       cleanupRoom(roomId, 'User ended call');
     }
   });
