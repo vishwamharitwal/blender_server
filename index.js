@@ -107,12 +107,12 @@ io.on('connection', (socket) => {
       const isVip2 = !!u2?.isVip;
 
       if (isVip1) {
-        if (p1 === 'girls' && !g2.includes('girl')) return false;
-        if (p1 === 'boys' && !g2.includes('boy')) return false;
+        if (p1.includes('girl') && !g2.includes('girl')) return false;
+        if (p1.includes('boy') && !g2.includes('boy')) return false;
       }
       if (isVip2) {
-        if (p2 === 'girls' && !g1.includes('girl')) return false;
-        if (p2 === 'boys' && !g1.includes('boy')) return false;
+        if (p2.includes('girl') && !g1.includes('girl')) return false;
+        if (p2.includes('boy') && !g1.includes('boy')) return false;
       }
       return true;
     }
