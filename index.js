@@ -19,6 +19,9 @@ const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const TURN_USERNAME = process.env.TURN_USERNAME || '';
 const TURN_CREDENTIAL = process.env.TURN_CREDENTIAL || '';
+// Metered dashboard "API Key" (not the static TURN password)
+const TURN_API_KEY = process.env.TURN_API_KEY || '';
+const METEREED_DOMAIN = process.env.METEREED_DOMAIN || 'blender.metered.live';
 
 const supabaseAdmin =
   SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
@@ -51,7 +54,7 @@ app.get('/health', (req, res) => {
   });
 });
 
-function getIceServers() {
+function staticIceServers() {
   const stun = {
     urls: [
       'stun:stun.relay.metered.ca:80',
@@ -77,13 +80,35 @@ function getIceServers() {
   return servers;
 }
 
+async function getIceServers() {
+  // Preferred: Metered temporary credentials via API key
+  if (TURN_API_KEY) {
+    try {
+      const url = `https://${METEREED_DOMAIN}/api/v1/turn/credentials?apiKey=${encodeURIComponent(TURN_API_KEY)}`;
+      const response = await fetch(url);
+      if (response.ok) {
+        const iceServers = await response.json();
+        if (Array.isArray(iceServers) && iceServers.length > 0) {
+          return iceServers;
+        }
+      } else {
+        console.error('[ICE] Metered API status', response.status);
+      }
+    } catch (e) {
+      console.error('[ICE] Metered API error', e.message);
+    }
+  }
+  return staticIceServers();
+}
+
 app.get('/ice-servers', async (req, res) => {
   try {
     const user = await getUserFromAuthHeader(req.headers.authorization);
     if (!user) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
-    return res.json({ iceServers: getIceServers() });
+    const iceServers = await getIceServers();
+    return res.json({ iceServers });
   } catch (e) {
     console.error('[ice-servers]', e.message);
     return res.status(500).json({ error: 'Failed to fetch ICE servers' });
