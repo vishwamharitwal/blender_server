@@ -17,11 +17,14 @@ app.use(express.json({ limit: '32kb' }));
 
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-const TURN_USERNAME = process.env.TURN_USERNAME || '';
-const TURN_CREDENTIAL = process.env.TURN_CREDENTIAL || '';
+const TURN_USERNAME = process.env.TURN_USERNAME || '39a89e2f9b2fc90068fc0754';
+const TURN_CREDENTIAL = process.env.TURN_CREDENTIAL || '7yIO3XV5gD25+gkv';
 // Metered dashboard "API Key" (not the static TURN password)
 const TURN_API_KEY = process.env.TURN_API_KEY || '';
-const METEREED_DOMAIN = process.env.METEREED_DOMAIN || 'blender.metered.live';
+const METEREED_DOMAIN =
+  process.env.METERED_DOMAIN ||
+  process.env.METEREED_DOMAIN ||
+  'blender.metered.live';
 
 const supabaseAdmin =
   SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
@@ -89,6 +92,7 @@ async function getIceServers() {
       if (response.ok) {
         const iceServers = await response.json();
         if (Array.isArray(iceServers) && iceServers.length > 0) {
+          console.log(`[ICE] Successfully fetched ${iceServers.length} servers from Metered`);
           return iceServers;
         }
       } else {
@@ -231,7 +235,7 @@ const io = new Server(server, {
   },
   // Mobile radios often pause briefly; 5s was killing live calls.
   pingInterval: 20000,
-  pingTimeout: 25000,
+  pingTimeout: 30000,
   transports: ['websocket', 'polling'],
   maxHttpBufferSize: 1e5,
 });
@@ -316,9 +320,15 @@ io.on('connection', (socket) => {
 
   socket.on('rejoinCall', (data) => {
     const roomId = data?.roomId;
-    if (!roomId || !activeRooms.has(roomId)) return;
+    if (!roomId || !activeRooms.has(roomId)) {
+      socket.emit('callEnded', { message: 'The call has ended.' });
+      return;
+    }
     const room = activeRooms.get(roomId);
-    if (!isUserInRoom(room, socket.userId)) return;
+    if (!isUserInRoom(room, socket.userId)) {
+      socket.emit('callEnded', { message: 'The call has ended.' });
+      return;
+    }
     if (room.user1Id === socket.userId) room.user1 = socket.id;
     if (room.user2Id === socket.userId) room.user2 = socket.id;
     if (room.disconnectTimer) {
@@ -545,6 +555,7 @@ io.on('connection', (socket) => {
     const room = activeRooms.get(roomId);
     if (!room || !isRoomMember(room, socket)) {
       console.log(`[Relay Denied] ${eventName} by ${socket.id} room=${roomId}`);
+      socket.emit('callEnded', { message: 'The call has ended.' });
       return;
     }
     if (room.user1Id === socket.userId) room.user1 = socket.id;
@@ -623,7 +634,7 @@ io.on('connection', (socket) => {
             message: 'Partner disconnected.',
           });
           cleanupRoom(roomId, `Socket disconnect grace: ${reason}`);
-        }, 15000);
+        }, 25000);
       } else {
         const partnerId =
           room.user1Id === socket.userId ? room.user2 : room.user1;
